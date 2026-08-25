@@ -22,24 +22,23 @@ import shutil
 import atexit
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-# ============ 资源路径函数 ============
 def resource_path(relative_path):
-    """获取资源绝对路径，兼容 PyInstaller 打包"""
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
 
 
-# ============ 单实例检测 ============
 def check_single_instance():
-    """检查程序是否已有实例在运行"""
     mutex_name = "AIwallpaper_SingleInstance_Mutex"
     try:
         handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
         last_error = ctypes.windll.kernel32.GetLastError()
-        if last_error == 183:  # ERROR_ALREADY_EXISTS
+        if last_error == 183:
             return False
         global _mutex_handle
         _mutex_handle = handle
@@ -48,7 +47,6 @@ def check_single_instance():
         return True
 
 
-# ============ 城市获取 ============
 def get_city_by_ip_fast():
     def try_ip_api():
         try:
@@ -71,30 +69,56 @@ def get_city_by_ip_fast():
     return None
 
 
-# ============ 天气获取 ============
-def ReturnTempAndWeather6():
-    WEATHER_TRANSLATION = {
-        'Sunny': '晴', 'Partly cloudy': '局部多云', 'Cloudy': '多云', 'Overcast': '阴天',
-        'Mist': '薄雾', 'Patchy rain possible': '局部可能有雨', 'Patchy snow possible': '局部可能有雪',
-        'Patchy sleet possible': '局部可能有冻雨', 'Patchy freezing drizzle possible': '局部可能有冻毛毛雨',
-        'Thundery outbreaks possible': '可能有雷暴', 'Blowing snow': '吹雪', 'Blizzard': '暴风雪',
-        'Fog': '雾', 'Freezing fog': '冻雾', 'Patchy light drizzle': '局部有小毛毛雨',
-        'Light drizzle': '小毛毛雨', 'Freezing drizzle': '冻毛毛雨', 'Heavy freezing drizzle': '大冻毛毛雨',
-        'Patchy light rain': '局部有小雨', 'Light rain': '小雨', 'Moderate rain at times': '间中有中雨',
-        'Moderate rain': '中雨', 'Heavy rain at times': '间中有大雨', 'Heavy rain': '大雨',
-        'Light freezing rain': '小冻雨', 'Moderate or heavy freezing rain': '中到大冻雨',
-        'Light sleet': '小冻雨', 'Moderate or heavy sleet': '中到大冻雨', 'Patchy light snow': '局部有小雪',
-        'Light snow': '小雪', 'Patchy moderate snow': '局部有中雪', 'Moderate snow': '中雪',
-        'Patchy heavy snow': '局部有大雪', 'Heavy snow': '大雪', 'Ice pellets': '冰粒',
-        'Light rain shower': '小阵雨', 'Moderate or heavy rain shower': '中到大阵雨',
-        'Torrential rain shower': '暴雨阵雨', 'Light sleet showers': '小冻雨阵雨',
-        'Moderate or heavy sleet showers': '中到大冻雨阵雨', 'Light snow showers': '小阵雪',
-        'Moderate or heavy snow showers': '中到大阵雪', 'Light showers of ice pellets': '小冰粒阵雨',
-        'Moderate or heavy showers of ice pellets': '中到大冰粒阵雨', 'Patchy light rain with thunder': '局部小雨伴雷暴',
-        'Moderate or heavy rain with thunder': '中到大雨伴雷暴', 'Patchy light snow with thunder': '局部小雪伴雷暴',
-        'Moderate or heavy snow with thunder': '中到大雪伴雷暴', 'Clear': '晴朗',
-    }
+# 扩充后的天气翻译字典（覆盖常见 wttr.in 描述）
+WEATHER_TRANSLATION = {
+    'Sunny': '晴', 'Clear': '晴', 'Partly cloudy': '局部多云', 'Cloudy': '多云',
+    'Overcast': '阴天', 'Mist': '薄雾', 'Patchy rain possible': '局部可能有雨',
+    'Patchy rain nearby': '局部有雨', 'Patchy light rain nearby': '局部有小雨',
+    'Patchy moderate rain nearby': '局部有中雨', 'Patchy heavy rain nearby': '局部有大雨',
+    'Light rain nearby': '附近有小雨', 'Moderate rain nearby': '附近有中雨',
+    'Heavy rain nearby': '附近有大雨', 'Patchy snow possible': '局部可能有雪',
+    'Patchy snow nearby': '局部有雪', 'Patchy light snow nearby': '局部有小雪',
+    'Patchy moderate snow nearby': '局部有中雪', 'Patchy heavy snow nearby': '局部有大雪',
+    'Patchy sleet possible': '局部可能有冻雨', 'Patchy freezing drizzle possible': '局部可能有冻毛毛雨',
+    'Thundery outbreaks possible': '可能有雷暴', 'Blowing snow': '吹雪', 'Blizzard': '暴风雪',
+    'Fog': '雾', 'Freezing fog': '冻雾', 'Patchy light drizzle': '局部有小毛毛雨',
+    'Light drizzle': '小毛毛雨', 'Freezing drizzle': '冻毛毛雨', 'Heavy freezing drizzle': '大冻毛毛雨',
+    'Patchy light rain': '局部有小雨', 'Light rain': '小雨', 'Moderate rain at times': '间中有中雨',
+    'Moderate rain': '中雨', 'Heavy rain at times': '间中有大雨', 'Heavy rain': '大雨',
+    'Light freezing rain': '小冻雨', 'Moderate or heavy freezing rain': '中到大冻雨',
+    'Light sleet': '小冻雨', 'Moderate or heavy sleet': '中到大冻雨', 'Patchy light snow': '局部有小雪',
+    'Light snow': '小雪', 'Patchy moderate snow': '局部有中雪', 'Moderate snow': '中雪',
+    'Patchy heavy snow': '局部有大雪', 'Heavy snow': '大雪', 'Ice pellets': '冰粒',
+    'Light rain shower': '小阵雨', 'Moderate or heavy rain shower': '中到大阵雨',
+    'Torrential rain shower': '暴雨阵雨', 'Light sleet showers': '小冻雨阵雨',
+    'Moderate or heavy sleet showers': '中到大冻雨阵雨', 'Light snow showers': '小阵雪',
+    'Moderate or heavy snow showers': '中到大阵雪', 'Light showers of ice pellets': '小冰粒阵雨',
+    'Moderate or heavy showers of ice pellets': '中到大冰粒阵雨',
+    'Patchy light rain with thunder': '局部小雨伴雷暴', 'Moderate or heavy rain with thunder': '中到大雨伴雷暴',
+    'Patchy light snow with thunder': '局部小雪伴雷暴', 'Moderate or heavy snow with thunder': '中到大雪伴雷暴',
+    # 补充一些常见的组合描述
+    'Patchy light rain in area with thunder': '局部小雨伴雷暴',
+    'Patchy light snow in area with thunder': '局部小雪伴雷暴',
+    'Moderate or heavy rain in area with thunder': '中到大雨伴雷暴',
+}
 
+
+def translate_weather_en_to_cn(weather_en):
+    """将英文天气描述翻译为中文，先精确匹配，再尝试部分匹配"""
+    if not weather_en:
+        return '未知'
+    # 精确匹配
+    if weather_en in WEATHER_TRANSLATION:
+        return WEATHER_TRANSLATION[weather_en]
+    # 部分匹配：如果原文包含字典中的某个键，或某个键包含原文，则使用该键的翻译
+    for key, value in WEATHER_TRANSLATION.items():
+        if key.lower() in weather_en.lower() or weather_en.lower() in key.lower():
+            return value
+    # 都无法匹配则返回“未知”
+    return '未知'
+
+
+def ReturnTempAndWeather6():
     try:
         city = get_city_by_ip_fast()
         if not city:
@@ -105,7 +129,7 @@ def ReturnTempAndWeather6():
         current_data = weather_data.get('current_condition', [{}])[0]
         temperature = current_data.get('temp_C', 'N/A')
         weather_en = current_data.get('weatherDesc', [{}])[0].get('value', 'N/A')
-        weather_cn = WEATHER_TRANSLATION.get(weather_en, weather_en)
+        weather_cn = translate_weather_en_to_cn(weather_en)
 
         CITY_NAME_MAP = {
             'Fuzhou': '福州', 'Xiamen': '厦门', 'Quanzhou': '泉州', 'Zhangzhou': '漳州',
@@ -157,23 +181,26 @@ class WallpaperChanger:
             "6. 临时文件夹管理：可自定义临时文件夹位置，退出时自动清理。\n"
             "7. 开机自启动：可设置是否随系统启动。\n"
             "8. 背景颜色与字体设置：支持界面外观个性化。\n"
-            "9. 天气显示：主界面显示当前天气信息。"
+            "9. 天气显示：主界面显示当前天气信息。\n"
+            "10. 自定义图标：支持选择 ico/png/jpg/bmp/gif 等常见图片作为窗口图标。\n"
+            "11. 检查更新：在设置中点击按钮可检查最新版本。"
         )
         self.check_autostart()
 
-        # 临时目录
         self.temp_dir_override = None
         self.anime_temp_dir = None
         self._setup_temp_dir()
         atexit.register(self._cleanup_temp)
 
-        # 设置窗口图标（使用 1.ico）
-        try:
-            icon_path = resource_path("1.ico")
-            if os.path.exists(icon_path):
-                self.root.iconbitmap(icon_path)
-        except:
-            pass
+        self.config = self.load_config()
+        custom_icon_path = self.config.get('icon_path')
+
+        if custom_icon_path and os.path.exists(custom_icon_path):
+            self._apply_icon(custom_icon_path)
+        else:
+            default_icon = resource_path("1.ico")
+            if os.path.exists(default_icon):
+                self._apply_icon(default_icon)
 
         self.wallpaper_dir = None
         self.current_wallpaper = None
@@ -182,7 +209,11 @@ class WallpaperChanger:
             '.tif', '.tiff', '.webp', '.ico', '.cur', '.jp2', '.j2k',
             '.jpf', '.jpx', '.jpm', '.mj2', '.svg', '.heic', '.heif',
             '.avif', '.pbm', '.pgm', '.ppm', '.pnm', '.pcx', '.tga',
-            '.dds', '.psd', '.xbm', '.xpm', '.ras', '.exr', '.hdr'
+            '.dds', '.psd', '.xbm', '.xpm', '.ras', '.exr', '.hdr',
+            '.raw', '.cr2', '.nef', '.orf', '.sr2', '.arw', '.dng',
+            '.rw2', '.pef', '.raf', '.3fr', '.kdc', '.mef', '.mos',
+            '.mrw', '.nrw', '.ptx', '.x3f',
+            '.eps', '.ps', '.pdf', '.svgz'
         }
 
         self.canvas = None
@@ -221,18 +252,44 @@ class WallpaperChanger:
         self.category_buttons = {}
         self.prefetched_images = {}
 
-        # 刷新冷却
         self.refresh_cooldown = False
         self.refresh_btn = None
         self.refresh_countdown_label = None
 
+        self.current_version = "1.0.1"
+        self.github_repo = "CrystalKBITZ/AIwallpaper"
+
+        self.session = requests.Session()
+        self.session.headers.update({'User-Agent': 'Mozilla/5.0'})
+
+        self.cached_fonts = None
+
         self.setup_ui()
         self.update_clock()
+
+        threading.Thread(target=self._preload_fonts, daemon=True).start()
+        self.weather_update_thread = threading.Thread(target=self.weather_loop, daemon=True)
+        self.weather_update_thread.start()
+
         self.show_splash_animation()
         self.reset_bg_color()
 
-        self.weather_update_thread = threading.Thread(target=self.weather_loop, daemon=True)
-        self.weather_update_thread.start()
+    def _preload_fonts(self):
+        self.cached_fonts = sorted(tkfont.families())
+
+    def load_config(self):
+        config_path = Path("config.json")
+        if config_path.exists():
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+
+    def save_config(self, config_dict):
+        with open("config.json", 'w', encoding='utf-8') as f:
+            json.dump(config_dict, f, ensure_ascii=False, indent=4)
 
     def _setup_temp_dir(self):
         if self.temp_dir_override:
@@ -249,6 +306,20 @@ class WallpaperChanger:
                 shutil.rmtree(self.anime_temp_dir)
         except Exception as e:
             print(f"清理临时目录失败: {e}")
+
+    def _apply_icon(self, icon_path):
+        try:
+            if icon_path.lower().endswith('.ico'):
+                self.root.iconbitmap(icon_path)
+            else:
+                cache_ico = os.path.join(self.anime_temp_dir, "custom_icon.ico")
+                img = Image.open(icon_path)
+                if img.mode not in ('RGB', 'RGBA'):
+                    img = img.convert('RGBA')
+                img.save(cache_ico, sizes=[(16,16), (32,32), (48,48), (64,64)])
+                self.root.iconbitmap(cache_ico)
+        except Exception as e:
+            print(f"应用图标失败: {e}")
 
     def setup_ui(self):
         title_frame = tk.Frame(self.root, bg=self.bg_color)
@@ -320,7 +391,6 @@ class WallpaperChanger:
                                   font=(self.font_family, 10))
         self.listbox.pack(fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.listbox.yview)
-        # 确保双击事件绑定正确
         self.listbox.bind('<<ListboxSelect>>', self.preview_selected)
         self.listbox.bind('<Double-Button-1>', self.apply_selected_double)
 
@@ -350,7 +420,7 @@ class WallpaperChanger:
                                       font=(self.font_family, 10))
         self.preview_label.pack(fill=tk.BOTH, expand=True)
 
-    # ------- 在线壁纸入口 -------
+    # ========== 在线壁纸入口 ==========
     def show_online_wallpaper_entry(self):
         if self.prefetched_images:
             self.show_online_wallpaper_main()
@@ -388,18 +458,24 @@ class WallpaperChanger:
     def _initialize_all_categories(self):
         total = len(self.categories)
         completed = 0
-        for cat, tag in self.categories:
-            self.root.after(0, lambda c=cat: self.init_status_label.config(text=f"正在加载: {c}"))
+
+        def worker(cat, tag):
             try:
                 urls = self._get_wallpaper_urls(cat, tag)
                 images = self._download_images(urls)
-                self.prefetched_images[cat] = images
+                return cat, images
             except Exception as e:
                 print(f"初始化 {cat} 失败: {e}")
-                self.prefetched_images[cat] = []
-            completed += 1
-            progress_value = int(completed / total * 100)
-            self.root.after(0, lambda val=progress_value: self._update_init_progress(val))
+                return cat, []
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(worker, cat, tag): cat for cat, tag in self.categories}
+            for future in as_completed(futures):
+                cat, images = future.result()
+                self.prefetched_images[cat] = images
+                completed += 1
+                progress_value = int(completed / total * 100)
+                self.root.after(0, lambda v=progress_value: self._update_init_progress(v))
         self.root.after(0, self._on_init_complete)
 
     def _download_images(self, urls):
@@ -409,7 +485,8 @@ class WallpaperChanger:
                     img = Image.open(url)
                 else:
                     headers = {'User-Agent': 'Mozilla/5.0'}
-                    resp = requests.get(url, timeout=10, headers=headers)
+                    session = requests.Session()
+                    resp = session.get(url, timeout=10, headers=headers)
                     resp.raise_for_status()
                     img = Image.open(io.BytesIO(resp.content))
                 img.thumbnail((300, 300), Image.Resampling.LANCZOS)
@@ -419,7 +496,7 @@ class WallpaperChanger:
                 return None
 
         result = []
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ThreadPoolExecutor(max_workers=6) as executor:
             futures = [executor.submit(download_single, url) for url in urls]
             for future in as_completed(futures):
                 data = future.result()
@@ -475,7 +552,6 @@ class WallpaperChanger:
             self.category_buttons[text] = btn
             category_frame.grid_columnconfigure(idx, weight=1)
 
-        # 刷新按钮和倒计时标签
         refresh_frame = tk.Frame(category_frame, bg='#2b2b2b')
         refresh_frame.grid(row=0, column=len(self.categories), padx=(5,2), pady=2, sticky='ew')
         self.refresh_btn = tk.Button(refresh_frame, text="刷新", bg='#28a745', fg='white',
@@ -604,7 +680,7 @@ class WallpaperChanger:
         tk.Label(self.scrollable_frame, text=msg, bg='#2b2b2b', fg='red',
                  font=(self.font_family, 12)).pack(pady=50)
 
-    # ------- 获取图片URL列表 -------
+    # ========== 获取图片URL ==========
     def _save_urls_to_temp(self, category_name, urls):
         if not self.anime_temp_dir:
             return
@@ -728,7 +804,7 @@ class WallpaperChanger:
         base_seed = random.randint(1, 100000)
         return [f"https://loremflickr.com/300/300/{tag}?lock={base_seed + i}" for i in range(20)]
 
-    # ------- 壁纸设置（优化延迟） -------
+    # ========== 壁纸设置 ==========
     def set_online_wallpaper(self, url, img_id):
         if not messagebox.askyesno("确认更换", "是否更换壁纸？"):
             return
@@ -804,7 +880,7 @@ class WallpaperChanger:
                 self.root.after(0, lambda: messagebox.showerror("错误", f"下载随机壁纸失败：{error_msg}"))
         threading.Thread(target=choose_and_set, daemon=True).start()
 
-    # ------- 以下为原有辅助方法 -------
+    # ========== 辅助方法 ==========
     def _create_outlined_text(self, which, font):
         offsets = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
         if which == 'time':
@@ -845,18 +921,8 @@ class WallpaperChanger:
         self.canvas.coords(self.weather_text_id, weather_center[0], weather_center[1])
 
     def translate_weather_desc(self, desc):
-        mapping = {
-            'sunny': '晴', 'clear': '晴', 'partly cloudy': '多云', 'cloudy': '阴',
-            'overcast': '阴', 'light rain': '小雨', 'moderate rain': '中雨',
-            'heavy rain': '大雨', 'rain': '雨', 'thunderstorm': '雷阵雨',
-            'snow': '雪', 'light snow': '小雪', 'fog': '雾', 'mist': '雾',
-            'haze': '霾', 'windy': '风', 'unknown': '未知'
-        }
-        desc_lower = desc.lower()
-        for eng, chn in mapping.items():
-            if eng in desc_lower:
-                return chn
-        return desc
+        # 此方法保留兼容，但不再直接使用，所有翻译都走 translate_weather_en_to_cn
+        return translate_weather_en_to_cn(desc)
 
     def ensure_chinese_weather(self, text):
         temp_text = text.replace('°C', '').replace('℃', '')
@@ -889,49 +955,13 @@ class WallpaperChanger:
         return city
 
     def update_weather(self):
-        self.xxx = ReturnTempAndWeather6()
-        while not self.xxx:
-            self.xxx = ReturnTempAndWeather6()
-        weather_text = "今日天气: 获取失败"
-        city = self.get_city()
-        weather_desc = ""
-        temp = ""
-
-        try:
-            url = "https://wttr.in/?format=%t+%C&lang=zh"
-            req = urllib.request.Request(url, headers={'User-Agent': 'curl/7.64.1'})
-            with urllib.request.urlopen(req, timeout=5) as response:
-                raw = response.read().decode('utf-8').strip()
-                raw = ' '.join(raw.split()).replace('+', '')
-                parts = raw.split(' ', 1)
-                if len(parts) == 2:
-                    temp = parts[0].replace('°C', '').replace('℃', '')
-                    weather_desc = self.translate_weather_desc(parts[1])
-        except Exception:
-            pass
-
-        if not weather_desc:
-            try:
-                url = "https://api.vvhan.com/api/weather"
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=5) as response:
-                    data = json.loads(response.read().decode('utf-8'))
-                    if data.get('success'):
-                        weather_desc = self.translate_weather_desc(data.get('weather', ''))
-                        temp = data.get('temperature', '')
-            except:
-                pass
-
-        if weather_desc and temp:
-            if city:
-                weather_text = f"今日天气: {city} {weather_desc} {temp}°C"
-            else:
-                weather_text = f"今日天气: {weather_desc} {temp}°C"
-        else:
+        # 直接使用 ReturnTempAndWeather6 获取天气，确保翻译正确
+        weather_info = ReturnTempAndWeather6()
+        city, temp, desc = weather_info
+        if city == "获取失败" or desc == "N/A" or desc == "未知":
             weather_text = "今日天气: 获取失败"
-
-        weather_text = self.ensure_chinese_weather(weather_text)
-        weather_text = f"今日天气: {self.xxx[0]} {self.xxx[2]} {self.xxx[1]}°C"
+        else:
+            weather_text = f"今日天气: {city} {desc} {temp}°C"
         self.root.after(0, self._set_weather_text, weather_text)
 
     def _set_weather_text(self, text):
@@ -1050,6 +1080,14 @@ class WallpaperChanger:
                   bg='#4a4a4a', fg='white', width=button_width, height=1,
                   font=(self.font_family, 10)).pack(pady=5)
 
+        tk.Button(settings_win, text="自定义图标", command=self.show_icon_window,
+                  bg='#4a4a4a', fg='white', width=button_width, height=1,
+                  font=(self.font_family, 10)).pack(pady=5)
+
+        tk.Button(settings_win, text="检查更新", command=self.check_for_updates,
+                  bg='#4a4a4a', fg='white', width=button_width, height=1,
+                  font=(self.font_family, 10)).pack(pady=5)
+
         tk.Button(settings_win, text="关于", command=self.show_about,
                   bg='#4a4a4a', fg='white', width=button_width, height=1,
                   font=(self.font_family, 10)).pack(pady=5)
@@ -1058,14 +1096,269 @@ class WallpaperChanger:
                   bg='#4a4a4a', fg='white', width=button_width, height=1,
                   font=(self.font_family, 10)).pack(pady=(10, 20))
 
-    def choose_temp_dir(self):
-        folder = filedialog.askdirectory(title="选择临时文件夹")
-        if folder:
-            self.temp_dir_override = folder
-            self._cleanup_temp()
-            self._setup_temp_dir()
-            messagebox.showinfo("成功", f"临时文件夹已更改为：{folder}\n建议重启程序确保所有功能生效。")
+    # ========== 自定义图标窗口（优化后） ==========
+    def show_icon_window(self):
+        self.icon_win = tk.Toplevel(self.root)
+        win = self.icon_win
+        win.title("选择图标")
+        win.geometry("500x350")
+        win.configure(bg='#2b2b2b')
+        win.transient(self.root)
 
+        current_dir = self.config.get('icon_dir', os.path.abspath("."))
+        self.current_icon_dir = tk.StringVar(value=current_dir)
+        self.preview_photo = None
+
+        top_frame = tk.Frame(win, bg='#2b2b2b')
+        top_frame.pack(fill=tk.X, padx=10, pady=(10,5))
+
+        tk.Label(top_frame, text="文件夹:", bg='#2b2b2b', fg='white',
+                 font=(self.font_family, 9)).pack(side=tk.LEFT)
+        dir_entry = tk.Entry(top_frame, textvariable=self.current_icon_dir, width=35,
+                             bg='#3c3c3c', fg='white', insertbackground='white',
+                             font=(self.font_family, 9))
+        dir_entry.pack(side=tk.LEFT, padx=5)
+        tk.Button(top_frame, text="浏览", command=self.browse_icon_dir,
+                  bg='#4a4a4a', fg='white', font=(self.font_family, 9)).pack(side=tk.LEFT, padx=5)
+
+        main_frame = tk.Frame(win, bg='#2b2b2b')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0,5))
+
+        list_frame = tk.Frame(main_frame, bg='#2b2b2b')
+        list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        tk.Label(list_frame, text="图标文件（单击预览，双击应用）", bg='#2b2b2b', fg='white',
+                 font=(self.font_family, 9)).pack(anchor=tk.W)
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.icon_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set,
+                                       bg='#3c3c3c', fg='white', height=10,
+                                       selectbackground='#007acc',
+                                       font=(self.font_family, 9))
+        self.icon_listbox.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.icon_listbox.yview)
+
+        self.icon_listbox.bind('<<ListboxSelect>>', self.preview_selected_icon)
+        self.icon_listbox.bind('<Double-Button-1>', self.apply_selected_icon)
+
+        preview_frame = tk.Frame(main_frame, bg='#2b2b2b', width=180)
+        preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(5,0))
+        preview_frame.pack_propagate(False)
+
+        tk.Label(preview_frame, text="预览", bg='#2b2b2b', fg='white',
+                 font=(self.font_family, 9, 'bold')).pack(anchor=tk.W)
+        self.icon_preview_label = tk.Label(preview_frame, bg='#1a1a1a', text="选择文件预览",
+                                           fg='#666666', width=20, height=7,
+                                           font=(self.font_family, 9))
+        self.icon_preview_label.pack(fill=tk.BOTH, expand=True, pady=(5,0))
+
+        self.icon_status_label = tk.Label(win, text="", bg='#2b2b2b', fg='lightgreen',
+                                          font=(self.font_family, 9))
+        self.icon_status_label.pack(side=tk.BOTTOM, pady=5)
+
+        self.load_icon_files_async()
+
+    def browse_icon_dir(self):
+        folder = filedialog.askdirectory(initialdir=self.current_icon_dir.get())
+        if folder:
+            self.current_icon_dir.set(folder)
+            self.load_icon_files_async()
+
+    def load_icon_files_async(self):
+        directory = self.current_icon_dir.get()
+        self.icon_status_label.config(text="加载中...", fg='yellow')
+
+        def worker():
+            files = []
+            icon_exts = ('.ico', '.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff', '.webp',
+                         '.jfif', '.jpe', '.tif', '.cur', '.svg', '.heic', '.heif', '.avif',
+                         '.psd', '.tga', '.dds', '.exr', '.hdr', '.pbm', '.pgm', '.ppm',
+                         '.pnm', '.pcx', '.xbm', '.xpm')
+            try:
+                if os.path.isdir(directory):
+                    files = [f for f in os.listdir(directory)
+                             if os.path.isfile(os.path.join(directory, f)) and f.lower().endswith(icon_exts)]
+                    files.sort()
+            except Exception as e:
+                files = None
+                error = str(e)
+            self.root.after(0, lambda: self._update_icon_list(files, error if files is None else None))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _update_icon_list(self, files, error=None):
+        self.icon_listbox.delete(0, tk.END)
+        if error:
+            self.icon_status_label.config(text=f"读取失败: {error}", fg='red')
+            return
+        if not files:
+            self.icon_status_label.config(text="未找到图标文件", fg='yellow')
+            return
+        for f in files:
+            self.icon_listbox.insert(tk.END, f)
+        self.icon_status_label.config(text=f"共 {len(files)} 个文件", fg='white')
+
+    def preview_selected_icon(self, event=None):
+        selection = self.icon_listbox.curselection()
+        if not selection:
+            return
+        filename = self.icon_listbox.get(selection[0])
+        filepath = os.path.join(self.current_icon_dir.get(), filename)
+
+        def worker():
+            try:
+                img = Image.open(filepath)
+                img.thumbnail((160, 100), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                self.root.after(0, lambda: self._update_icon_preview(photo))
+            except:
+                self.root.after(0, lambda: self.icon_preview_label.config(image="", text="无法预览"))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _update_icon_preview(self, photo):
+        self.preview_photo = photo
+        self.icon_preview_label.config(image=photo, text="")
+
+    def apply_selected_icon(self, event=None):
+        selection = self.icon_listbox.curselection()
+        if not selection:
+            return
+        filename = self.icon_listbox.get(selection[0])
+        filepath = os.path.join(self.current_icon_dir.get(), filename)
+
+        try:
+            self._apply_icon(filepath)
+        except Exception as e:
+            self.icon_status_label.config(text=f"应用失败: {e}", fg='red')
+            return
+
+        self.config['icon_path'] = filepath
+        self.config['icon_dir'] = self.current_icon_dir.get()
+        self.save_config(self.config)
+        self.icon_status_label.config(text=f"已应用: {filename}", fg='lightgreen')
+        self.root.after(3000, lambda: self.icon_status_label.config(text="") if self.icon_win.winfo_exists() else None)
+
+    # ========== 检查更新 ==========
+    def fetch_latest_release_info(self):
+        api_url = f"https://api.github.com/repos/{self.github_repo}/releases/latest"
+        try:
+            resp = self.session.get(api_url, timeout=10, verify=False)
+            resp.raise_for_status()
+            data = resp.json()
+            latest_version = data.get('tag_name', '').lstrip('v')
+            assets = data.get('assets', [])
+            download_url = None
+            for asset in assets:
+                if asset['name'].endswith('.exe') or asset['name'].endswith('.zip'):
+                    download_url = asset['browser_download_url']
+                    break
+            if not download_url:
+                download_url = data.get('html_url')
+            return latest_version, download_url
+        except Exception as e:
+            print(f"获取更新信息失败: {e}")
+            return None, None
+
+    def check_for_updates(self):
+        self.status_label.config(text="正在检查更新...")
+        self.root.update_idletasks()
+
+        def worker():
+            latest_version, download_url = self.fetch_latest_release_info()
+            self.root.after(0, lambda: self._on_update_check_done(latest_version, download_url))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_update_check_done(self, latest_version, download_url):
+        self.status_label.config(text="就绪")
+        if not latest_version:
+            messagebox.showerror("检查更新", "无法连接更新服务器，请稍后重试。")
+            return
+        if latest_version > self.current_version:
+            msg = f"发现新版本 v{latest_version}\n是否前往下载？"
+            if messagebox.askyesno("发现新版本", msg):
+                webbrowser.open(download_url)
+        else:
+            messagebox.showinfo("检查更新", "当前已是最新版本。")
+
+    # ========== 开机自启动 ==========
+    def check_autostart(self):
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                 r"Software\Microsoft\Windows\CurrentVersion\Run",
+                                 0, winreg.KEY_READ)
+            try:
+                winreg.QueryValueEx(key, "CrystalWallpaper")
+                self.autostart_var.set(True)
+            except FileNotFoundError:
+                self.autostart_var.set(False)
+            finally:
+                winreg.CloseKey(key)
+        except:
+            self.autostart_var.set(False)
+
+    def set_autostart(self, enabled):
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        app_name = "CrystalWallpaper"
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
+            if enabled:
+                if getattr(sys, 'frozen', False):
+                    app_path = sys.executable
+                else:
+                    app_path = os.path.abspath(sys.argv[0])
+                winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, app_path)
+            else:
+                try:
+                    winreg.DeleteValue(key, app_name)
+                except FileNotFoundError:
+                    pass
+            winreg.CloseKey(key)
+        except Exception as e:
+            messagebox.showerror("错误", f"设置开机自启动失败：{e}")
+
+    def toggle_autostart(self):
+        new_state = not self.autostart_var.get()
+        self.autostart_var.set(new_state)
+        self.set_autostart(new_state)
+        self.update_autostart_button()
+
+    def update_autostart_button(self):
+        if self.autostart_btn is not None:
+            if self.autostart_var.get():
+                self.autostart_btn.config(text="开机自启动 [关]", bg='#dc3545', fg='white')
+            else:
+                self.autostart_btn.config(text="开机自启动 [开]", bg='#28a745', fg='white')
+
+    # ========== 背景颜色 ==========
+    def choose_bg_color(self):
+        color = colorchooser.askcolor(color=self.bg_color, title="选择背景颜色")
+        if color[1]:
+            self.bg_color = color[1]
+            self.apply_bg_color()
+
+    def reset_bg_color(self):
+        self.bg_color = self.default_bg_color
+        self.apply_bg_color()
+
+    def apply_bg_color(self):
+        self.root.configure(bg=self.bg_color)
+        for widget in self.root.winfo_children():
+            self._update_widget_bg(widget)
+
+    def _update_widget_bg(self, widget):
+        try:
+            if isinstance(widget, tk.Frame):
+                widget.configure(bg=self.bg_color)
+            elif isinstance(widget, tk.Label):
+                if widget not in [self.preview_label]:
+                    widget.configure(bg=self.bg_color)
+        except:
+            pass
+        for child in widget.winfo_children():
+            self._update_widget_bg(child)
+
+    # ========== 字体设置 ==========
     def show_font_settings(self):
         font_win = tk.Toplevel(self.root)
         font_win.title("字体设置")
@@ -1088,7 +1381,10 @@ class WallpaperChanger:
                                   font=(self.font_family, 10))
         font_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=font_listbox.yview)
-        all_fonts = sorted(tkfont.families())
+        if self.cached_fonts is None:
+            all_fonts = sorted(tkfont.families())
+        else:
+            all_fonts = self.cached_fonts
         for f in all_fonts:
             font_listbox.insert(tk.END, f)
         def filter_fonts(event=None):
@@ -1132,81 +1428,7 @@ class WallpaperChanger:
                 change_widget_font(child)
         change_widget_font(self.root)
 
-    def update_autostart_button(self):
-        if self.autostart_btn is not None:
-            if self.autostart_var.get():
-                self.autostart_btn.config(text="开机自启动 [关]", bg='#dc3545', fg='white')
-            else:
-                self.autostart_btn.config(text="开机自启动 [开]", bg='#28a745', fg='white')
-
-    def toggle_autostart(self):
-        new_state = not self.autostart_var.get()
-        self.autostart_var.set(new_state)
-        self.set_autostart(new_state)
-        self.update_autostart_button()
-
-    def check_autostart(self):
-        try:
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                                 r"Software\Microsoft\Windows\CurrentVersion\Run",
-                                 0, winreg.KEY_READ)
-            try:
-                winreg.QueryValueEx(key, "CrystalWallpaper")
-                self.autostart_var.set(True)
-            except FileNotFoundError:
-                self.autostart_var.set(False)
-            finally:
-                winreg.CloseKey(key)
-        except:
-            self.autostart_var.set(False)
-
-    def set_autostart(self, enabled):
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        app_name = "CrystalWallpaper"
-        try:
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
-            if enabled:
-                if getattr(sys, 'frozen', False):
-                    app_path = sys.executable
-                else:
-                    app_path = os.path.abspath(sys.argv[0])
-                winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, app_path)
-            else:
-                try:
-                    winreg.DeleteValue(key, app_name)
-                except FileNotFoundError:
-                    pass
-            winreg.CloseKey(key)
-        except Exception as e:
-            messagebox.showerror("错误", f"设置开机自启动失败：{e}")
-
-    def choose_bg_color(self):
-        color = colorchooser.askcolor(color=self.bg_color, title="选择背景颜色")
-        if color[1]:
-            self.bg_color = color[1]
-            self.apply_bg_color()
-
-    def reset_bg_color(self):
-        self.bg_color = self.default_bg_color
-        self.apply_bg_color()
-
-    def apply_bg_color(self):
-        self.root.configure(bg=self.bg_color)
-        for widget in self.root.winfo_children():
-            self._update_widget_bg(widget)
-
-    def _update_widget_bg(self, widget):
-        try:
-            if isinstance(widget, tk.Frame):
-                widget.configure(bg=self.bg_color)
-            elif isinstance(widget, tk.Label):
-                if widget not in [self.preview_label]:
-                    widget.configure(bg=self.bg_color)
-        except:
-            pass
-        for child in widget.winfo_children():
-            self._update_widget_bg(child)
-
+    # ========== 关于 ==========
     def show_about(self):
         about_win = tk.Toplevel(self.root)
         about_win.title("关于")
@@ -1217,7 +1439,7 @@ class WallpaperChanger:
                  font=(self.font_family, 16, 'bold')).pack(pady=15)
         about_text = ("AIwallpaper\n\n"
                       "支持静态图片壁纸切换\n\n"
-                      "版本：v1.0\n"
+                      "版本：1.0.1\n"
                       "开发者：Crystal空白\n"
                       "开发者QQ：3635835307\n"
                       "开发协助：-呈阶梯状分布-")
@@ -1232,18 +1454,30 @@ class WallpaperChanger:
                   bg='#4a4a4a', fg='white', width=10,
                   font=(self.font_family, 10)).pack(pady=10)
 
-    # 本地壁纸设置相关
+    # ========== 临时文件夹 ==========
+    def choose_temp_dir(self):
+        folder = filedialog.askdirectory(title="选择临时文件夹")
+        if folder:
+            self.temp_dir_override = folder
+            self._cleanup_temp()
+            self._setup_temp_dir()
+            messagebox.showinfo("成功", f"临时文件夹已更改为：{folder}\n建议重启程序确保所有功能生效。")
+
+    # ========== 本地壁纸设置 ==========
     def set_wallpaper(self, path):
         try:
+            test_img = Image.open(path)
+            test_img.close()
+            return self._set_wallpaper_via_bmp(path)
+        except:
             result = ctypes.windll.user32.SystemParametersInfoW(20, 0, str(path), 3)
             if result:
                 self.current_wallpaper = path
                 self.status_label.config(text=f"当前壁纸: {path.name}")
                 return True
             else:
-                return self._set_wallpaper_via_bmp(path)
-        except Exception as e:
-            return self._set_wallpaper_via_bmp(path)
+                messagebox.showerror("错误", "该图片格式不受支持或文件损坏")
+                return False
 
     def _set_wallpaper_via_bmp(self, path):
         try:
@@ -1304,13 +1538,15 @@ class WallpaperChanger:
         file_path = filedialog.askopenfilename(
             title="选择背景图片",
             filetypes=[
-                ("所有图片文件", "*.jpg *.jpeg *.jpe *.jfif *.png *.bmp *.gif *.tif *.tiff *.webp *.ico *.cur *.jp2 *.j2k *.jpf *.jpx *.jpm *.mj2 *.svg *.heic *.heif *.avif *.pbm *.pgm *.ppm *.pnm *.pcx *.tga *.dds *.psd *.xbm *.xpm *.ras *.exr *.hdr"),
+                ("所有图片文件", "*.jpg *.jpeg *.jpe *.jfif *.png *.bmp *.gif *.tif *.tiff *.webp *.ico *.cur *.jp2 *.j2k *.jpf *.jpx *.jpm *.mj2 *.svg *.heic *.heif *.avif *.pbm *.pgm *.ppm *.pnm *.pcx *.tga *.dds *.psd *.xbm *.xpm *.ras *.exr *.hdr *.raw *.cr2 *.nef *.orf *.sr2 *.arw *.dng *.rw2 *.pef *.raf *.3fr *.kdc *.mef *.mos *.mrw *.nrw *.ptx *.x3f *.eps *.ps *.pdf"),
                 ("JPEG", "*.jpg *.jpeg *.jpe *.jfif"),
                 ("PNG", "*.png"),
                 ("GIF", "*.gif"),
                 ("BMP", "*.bmp"),
                 ("TIFF", "*.tif *.tiff"),
                 ("WebP", "*.webp"),
+                ("RAW 格式", "*.raw *.cr2 *.nef *.orf *.sr2 *.arw *.dng *.rw2 *.pef *.raf *.3fr *.kdc *.mef *.mos *.mrw *.nrw *.ptx *.x3f"),
+                ("矢量格式", "*.svg *.eps *.ps *.pdf"),
                 ("所有文件", "*.*")
             ]
         )
@@ -1379,7 +1615,6 @@ class WallpaperChanger:
 
 
 def main():
-    # 单实例检测
     if not check_single_instance():
         root = tk.Tk()
         root.withdraw()
