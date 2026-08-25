@@ -69,7 +69,7 @@ def get_city_by_ip_fast():
     return None
 
 
-# 扩充后的天气翻译字典（覆盖常见 wttr.in 描述）
+# 天气翻译字典
 WEATHER_TRANSLATION = {
     'Sunny': '晴', 'Clear': '晴', 'Partly cloudy': '局部多云', 'Cloudy': '多云',
     'Overcast': '阴天', 'Mist': '薄雾', 'Patchy rain possible': '局部可能有雨',
@@ -96,7 +96,6 @@ WEATHER_TRANSLATION = {
     'Moderate or heavy showers of ice pellets': '中到大冰粒阵雨',
     'Patchy light rain with thunder': '局部小雨伴雷暴', 'Moderate or heavy rain with thunder': '中到大雨伴雷暴',
     'Patchy light snow with thunder': '局部小雪伴雷暴', 'Moderate or heavy snow with thunder': '中到大雪伴雷暴',
-    # 补充一些常见的组合描述
     'Patchy light rain in area with thunder': '局部小雨伴雷暴',
     'Patchy light snow in area with thunder': '局部小雪伴雷暴',
     'Moderate or heavy rain in area with thunder': '中到大雨伴雷暴',
@@ -104,17 +103,13 @@ WEATHER_TRANSLATION = {
 
 
 def translate_weather_en_to_cn(weather_en):
-    """将英文天气描述翻译为中文，先精确匹配，再尝试部分匹配"""
     if not weather_en:
         return '未知'
-    # 精确匹配
     if weather_en in WEATHER_TRANSLATION:
         return WEATHER_TRANSLATION[weather_en]
-    # 部分匹配：如果原文包含字典中的某个键，或某个键包含原文，则使用该键的翻译
     for key, value in WEATHER_TRANSLATION.items():
         if key.lower() in weather_en.lower() or weather_en.lower() in key.lower():
             return value
-    # 都无法匹配则返回“未知”
     return '未知'
 
 
@@ -183,7 +178,9 @@ class WallpaperChanger:
             "8. 背景颜色与字体设置：支持界面外观个性化。\n"
             "9. 天气显示：主界面显示当前天气信息。\n"
             "10. 自定义图标：支持选择 ico/png/jpg/bmp/gif 等常见图片作为窗口图标。\n"
-            "11. 检查更新：在设置中点击按钮可检查最新版本。"
+            "11. 检查更新：在设置中点击按钮可检查最新版本。\n"
+            "12. 仓库地址：可查看 GitHub 和 Gitee 仓库链接，支持复制和跳转。\n"
+            "13. 壁纸下载：在线壁纸右键可下载，可自定义默认保存路径。"
         )
         self.check_autostart()
 
@@ -251,10 +248,14 @@ class WallpaperChanger:
         self.current_tag = "nature,landscape"
         self.category_buttons = {}
         self.prefetched_images = {}
+        self.next_batch_images = {}          # 下一批预取图片
+        self.prefetching = set()             # 正在预取的分类
+        self.prefetch_semaphore = threading.Semaphore(2)  # 预取并发控制
 
         self.refresh_cooldown = False
         self.refresh_btn = None
         self.refresh_countdown_label = None
+        self.refresh_countdown_after_id = None  # 保存 after ID 用于取消
 
         self.current_version = "1.0.1"
         self.github_repo = "CrystalKBITZ/AIwallpaper"
@@ -263,6 +264,7 @@ class WallpaperChanger:
         self.session.headers.update({'User-Agent': 'Mozilla/5.0'})
 
         self.cached_fonts = None
+        self.icon_photo = None
 
         self.setup_ui()
         self.update_clock()
@@ -274,6 +276,7 @@ class WallpaperChanger:
         self.show_splash_animation()
         self.reset_bg_color()
 
+    # ========== 基础方法 ==========
     def _preload_fonts(self):
         self.cached_fonts = sorted(tkfont.families())
 
@@ -309,18 +312,35 @@ class WallpaperChanger:
 
     def _apply_icon(self, icon_path):
         try:
-            if icon_path.lower().endswith('.ico'):
-                self.root.iconbitmap(icon_path)
-            else:
-                cache_ico = os.path.join(self.anime_temp_dir, "custom_icon.ico")
-                img = Image.open(icon_path)
-                if img.mode not in ('RGB', 'RGBA'):
-                    img = img.convert('RGBA')
-                img.save(cache_ico, sizes=[(16,16), (32,32), (48,48), (64,64)])
-                self.root.iconbitmap(cache_ico)
+            self.current_icon_path = icon_path
+            img = Image.open(icon_path)
+            if img.mode not in ('RGBA', 'RGB'):
+                img = img.convert('RGBA')
+            sizes = [(16, 16), (32, 32), (48, 48), (64, 64)]
+            photos = []
+            for size in sizes:
+                resized = img.copy()
+                resized.thumbnail(size, Image.Resampling.LANCZOS)
+                photos.append(ImageTk.PhotoImage(resized))
+            self.icon_photo = photos
+            self.root.iconphoto(True, *photos)
         except Exception as e:
             print(f"应用图标失败: {e}")
+            try:
+                if icon_path.lower().endswith('.ico'):
+                    self.root.iconbitmap(icon_path)
+            except:
+                pass
 
+    def _apply_icon_to_window(self, window):
+        if not hasattr(self, 'icon_photo') or not self.icon_photo:
+            return
+        try:
+            window.iconphoto(False, *self.icon_photo)
+        except Exception as e:
+            print(f"应用图标到窗口失败: {e}")
+
+    # ========== UI 构建 ==========
     def setup_ui(self):
         title_frame = tk.Frame(self.root, bg=self.bg_color)
         title_frame.pack(fill=tk.X, pady=5)
@@ -434,6 +454,7 @@ class WallpaperChanger:
         win.geometry("500x300")
         win.configure(bg='#2b2b2b')
         win.transient(self.root)
+        self._apply_icon_to_window(win)
 
         tk.Label(win, text="AIwallpaper 在线壁纸初始化", bg='#2b2b2b', fg='white',
                  font=(self.font_family, 14, 'bold')).pack(pady=20)
@@ -489,25 +510,24 @@ class WallpaperChanger:
                     resp = session.get(url, timeout=10, headers=headers)
                     resp.raise_for_status()
                     img = Image.open(io.BytesIO(resp.content))
-                img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+
+                if img.width <= img.height:
+                    return None
+
+                img.thumbnail((200, 200), Image.Resampling.LANCZOS)
                 return url, img
             except Exception as e:
                 print(f"下载 {url} 失败: {e}")
                 return None
 
         result = []
-        with ThreadPoolExecutor(max_workers=6) as executor:
+        with ThreadPoolExecutor(max_workers=16) as executor:  # 提高并发数
             futures = [executor.submit(download_single, url) for url in urls]
             for future in as_completed(futures):
                 data = future.result()
                 if data:
                     result.append(data)
-
-        photo_list = []
-        for idx, (url, img) in enumerate(result):
-            photo = ImageTk.PhotoImage(img)
-            photo_list.append({'id': idx, 'download_url': url, 'photo': photo})
-        return photo_list
+        return result
 
     def _update_init_progress(self, value):
         if hasattr(self, 'init_progress'):
@@ -529,6 +549,33 @@ class WallpaperChanger:
             self.init_win.destroy()
         self.show_online_wallpaper_main()
 
+    def _ensure_prefetching(self):
+        """确保所有分类都有下一批预取图片（如果没有且未在预取中）"""
+        for cat, tag in self.categories:
+            if cat in self.next_batch_images or cat in self.prefetching:
+                continue
+            self._prefetch_next_batch(cat, tag)
+
+    def _prefetch_next_batch(self, category_name, tag):
+        """后台预取下一批壁纸，存入 next_batch_images"""
+        if category_name in self.prefetching:
+            return
+        self.prefetching.add(category_name)
+
+        def work():
+            with self.prefetch_semaphore:
+                try:
+                    urls = self._get_wallpaper_urls(category_name, tag)
+                    if urls:
+                        images = self._download_images(urls)
+                        self.next_batch_images[category_name] = images
+                except Exception as e:
+                    print(f"预取 {category_name} 失败: {e}")
+                finally:
+                    self.prefetching.discard(category_name)
+        threading.Thread(target=work, daemon=True).start()
+
+    # ========== 在线壁纸主界面 ==========
     def show_online_wallpaper_main(self):
         self.online_win = tk.Toplevel(self.root)
         win = self.online_win
@@ -536,6 +583,7 @@ class WallpaperChanger:
         win.geometry("700x600")
         win.configure(bg='#2b2b2b')
         win.transient(self.root)
+        self._apply_icon_to_window(win)
 
         tk.Label(win, text="在线壁纸 - 点击图片设置为桌面壁纸", bg='#2b2b2b', fg='white',
                  font=(self.font_family, 12, 'bold')).pack(pady=10)
@@ -581,20 +629,46 @@ class WallpaperChanger:
         canvas.bind("<MouseWheel>", _on_mousewheel)
         scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
 
+        self.online_context_menu = tk.Menu(win, tearoff=0)
+
         def _on_close():
+            # 取消刷新倒计时
+            if self.refresh_countdown_after_id is not None:
+                try:
+                    self.root.after_cancel(self.refresh_countdown_after_id)
+                except:
+                    pass
+                self.refresh_countdown_after_id = None
+            # 重置状态
+            self.refresh_cooldown = False
+            # 清理引用
             canvas.unbind("<MouseWheel>")
             scrollable_frame.unbind("<MouseWheel>")
+            if hasattr(self, 'online_context_menu'):
+                self.online_context_menu.destroy()
             win.destroy()
         win.protocol("WM_DELETE_WINDOW", _on_close)
 
         self.scrollable_frame = scrollable_frame
         self.online_photo_refs = []
 
+        # 进入主界面立即启动10秒冷却
+        self.refresh_cooldown = True
+        if self.refresh_btn:
+            self.refresh_btn.config(state=tk.DISABLED)
+        self._update_refresh_countdown(10)
+
         self.switch_category(self.current_category, self.current_tag)
+
+        # 启动后台预取（如果必要）
+        self._ensure_prefetching()
 
     def switch_category(self, category_name, tag):
         self.current_category = category_name
         self.current_tag = tag
+
+        if not hasattr(self, 'scrollable_frame') or self.scrollable_frame is None:
+            return
 
         for name, btn in self.category_buttons.items():
             btn.config(bg='#4a4a4a')
@@ -610,7 +684,8 @@ class WallpaperChanger:
             loading_label = tk.Label(self.scrollable_frame, text="正在加载...", bg='#2b2b2b', fg='white',
                                      font=(self.font_family, 12))
             loading_label.pack(pady=50)
-            threading.Thread(target=self._reload_category_async, args=(category_name, tag), daemon=True).start()
+            if category_name not in self.prefetched_images:
+                threading.Thread(target=self._reload_category_async, args=(category_name, tag), daemon=True).start()
 
     def _reload_category_async(self, category_name, tag):
         def work():
@@ -621,6 +696,8 @@ class WallpaperChanger:
             images = self._download_images(urls)
             self.prefetched_images[category_name] = images
             self.root.after(0, lambda: self._display_loaded_wallpapers(images))
+            # 预取下一批
+            self._prefetch_next_batch(category_name, tag)
         threading.Thread(target=work, daemon=True).start()
 
     def refresh_current_category(self):
@@ -631,54 +708,123 @@ class WallpaperChanger:
             self.refresh_btn.config(state=tk.DISABLED)
         self._update_refresh_countdown(10)
 
-        self.switch_category(self.current_category, self.current_tag)
-        self.prefetched_images[self.current_category] = []
-        threading.Thread(target=self._reload_category_async,
-                         args=(self.current_category, self.current_tag), daemon=True).start()
+        category = self.current_category
+        # 优先使用预取的下一批
+        next_images = self.next_batch_images.pop(category, None)
+        if next_images:
+            self.prefetched_images[category] = next_images
+            self._display_loaded_wallpapers(next_images)
+            # 立即预取下一批
+            self._prefetch_next_batch(category, self.current_tag)
+        else:
+            # 没有预取，走正常加载流程
+            self.prefetched_images[category] = []
+            self.switch_category(category, self.current_tag)
+            threading.Thread(target=self._reload_category_async,
+                             args=(category, self.current_tag), daemon=True).start()
 
     def _update_refresh_countdown(self, remaining):
         if remaining > 0:
             if self.refresh_countdown_label:
                 self.refresh_countdown_label.config(text=f"{remaining}s")
-            self.root.after(1000, lambda: self._update_refresh_countdown(remaining - 1))
+            self.refresh_countdown_after_id = self.root.after(1000, lambda: self._update_refresh_countdown(remaining - 1))
         else:
             if self.refresh_countdown_label:
                 self.refresh_countdown_label.config(text="")
             self.refresh_cooldown = False
             if self.refresh_btn:
                 self.refresh_btn.config(state=tk.NORMAL)
+            self.refresh_countdown_after_id = None
 
     def _display_loaded_wallpapers(self, images):
+        if not hasattr(self, 'scrollable_frame') or self.scrollable_frame is None:
+            return
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
         self.online_photo_refs.clear()
-        self.current_online_images = [{'id': img['id'], 'download_url': img['download_url']} for img in images]
+        self.current_online_images = [{'id': idx, 'download_url': url} for idx, (url, _) in enumerate(images)]
 
         if not images:
             tk.Label(self.scrollable_frame, text="该分区暂无壁纸", bg='#2b2b2b', fg='white').pack()
             return
 
         row, col = 0, 0
-        for img in images:
-            placeholder = tk.Label(self.scrollable_frame, image=img['photo'], bg='#2b2b2b', cursor='hand2')
-            placeholder.image = img['photo']
+        for idx, (url, pil_img) in enumerate(images):
+            photo = ImageTk.PhotoImage(pil_img)
+            self.online_photo_refs.append(photo)
+
+            placeholder = tk.Label(self.scrollable_frame, image=photo, bg='#2b2b2b', cursor='hand2')
+            placeholder.image = photo
             placeholder.grid(row=row, column=col, padx=10, pady=10)
-            placeholder.bind("<Button-1>", lambda e, url=img['download_url'], id=img['id']: self.set_online_wallpaper(url, id))
-            self.online_photo_refs.append(img['photo'])
+            placeholder.bind("<Button-1>", lambda e, url=url, id=idx: self.set_online_wallpaper(url, id))
+            placeholder.bind("<Button-3>", lambda e, url=url: self.show_online_context_menu(e, url))
+
             col += 1
-            if col >= 2:
+            if col >= 3:
                 col = 0
                 row += 1
 
         random_btn = tk.Button(self.scrollable_frame, text="随机壁纸", command=self.set_random_online_wallpaper,
                                bg='#007acc', fg='white', font=(self.font_family, 12))
-        random_btn.grid(row=row + 1, column=0, columnspan=2, pady=20)
+        random_btn.grid(row=row + 1, column=0, columnspan=3, pady=20)
 
     def _show_load_error(self, msg):
+        if not hasattr(self, 'scrollable_frame') or self.scrollable_frame is None:
+            return
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
         tk.Label(self.scrollable_frame, text=msg, bg='#2b2b2b', fg='red',
                  font=(self.font_family, 12)).pack(pady=50)
+
+    # ========== 右键菜单与下载 ==========
+    def show_online_context_menu(self, event, url):
+        self.online_context_menu.delete(0, tk.END)
+        self.online_context_menu.add_command(label="下载壁纸", command=lambda: self.download_online_wallpaper(url, use_default=True))
+        self.online_context_menu.add_command(label="另存为...", command=lambda: self.download_online_wallpaper(url, use_default=False))
+        try:
+            self.online_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.online_context_menu.grab_release()
+
+    def download_online_wallpaper(self, url, use_default=True):
+        if use_default and self.config.get('download_path'):
+            save_dir = Path(self.config['download_path'])
+            save_dir.mkdir(parents=True, exist_ok=True)
+            ext = os.path.splitext(urlparse(url).path)[1]
+            if not ext or ext.lower() not in ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp']:
+                ext = '.jpg'
+            filename = f"wallpaper_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{random.randint(100,999)}{ext}"
+            file_path = save_dir / filename
+        else:
+            file_path = filedialog.asksaveasfilename(
+                parent=self.online_win,
+                title="保存壁纸",
+                defaultextension=".jpg",
+                filetypes=[("JPEG", "*.jpg"), ("PNG", "*.png"), ("WebP", "*.webp"), ("所有文件", "*.*")]
+            )
+            if not file_path:
+                return
+
+        def download_task():
+            try:
+                high_res_url = self._enhance_image_url(url)
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                session = requests.Session()
+                try:
+                    resp = session.get(high_res_url, timeout=20, headers=headers)
+                    resp.raise_for_status()
+                except:
+                    resp = session.get(url, timeout=20, headers=headers)
+                    resp.raise_for_status()
+
+                with open(file_path, 'wb') as f:
+                    f.write(resp.content)
+
+                self.root.after(0, lambda: messagebox.showinfo("下载完成", f"壁纸已保存到：\n{file_path}"))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("下载失败", f"下载失败：{str(e)}"))
+
+        threading.Thread(target=download_task, daemon=True).start()
 
     # ========== 获取图片URL ==========
     def _save_urls_to_temp(self, category_name, urls):
@@ -734,7 +880,7 @@ class WallpaperChanger:
                             unique_urls.append(u)
                     if unique_urls:
                         random.shuffle(unique_urls)
-                        urls = unique_urls[:20]
+                        urls = unique_urls[:30]
                     else:
                         urls = self._get_loremflickr_urls(tag)
             except Exception as e:
@@ -765,7 +911,7 @@ class WallpaperChanger:
                 unique_urls = filtered
             if unique_urls:
                 random.shuffle(unique_urls)
-                return unique_urls[:20]
+                return unique_urls[:30]
         except Exception as e:
             print(f"二次元爬取失败: {e}")
         return self._get_anime_fallback_urls()
@@ -774,14 +920,14 @@ class WallpaperChanger:
         headers = {'User-Agent': 'Mozilla/5.0'}
         urls = []
         try:
-            resp = requests.get("https://nekos.best/api/v2/neko?amount=20", timeout=8, headers=headers)
+            resp = requests.get("https://nekos.best/api/v2/neko?amount=30", timeout=8, headers=headers)
             resp.raise_for_status()
             data = resp.json()
             for item in data.get('results', []):
                 if item.get('url'):
                     urls.append(item['url'])
-            if urls:
-                return urls[:20]
+            if len(urls) >= 30:
+                return urls[:30]
         except Exception as e:
             print(f"nekos.best失败: {e}")
         types = ['waifu', 'neko', 'shinobu', 'megumin', 'awoo', 'cuddle', 'kiss', 'pat']
@@ -792,17 +938,19 @@ class WallpaperChanger:
                 img_url = resp.json().get('url')
                 if img_url:
                     urls.append(img_url)
-                if len(urls) >= 20:
+                if len(urls) >= 30:
                     break
             except:
                 continue
-        if urls:
-            return urls[:20]
-        return [f"https://picsum.photos/id/{id}/300/300" for id in range(1015, 1035)]
+        if len(urls) >= 30:
+            return urls[:30]
+        while len(urls) < 30:
+            urls.append(f"https://picsum.photos/id/{random.randint(1000, 2000)}/300/300")
+        return urls[:30]
 
     def _get_loremflickr_urls(self, tag):
         base_seed = random.randint(1, 100000)
-        return [f"https://loremflickr.com/300/300/{tag}?lock={base_seed + i}" for i in range(20)]
+        return [f"https://loremflickr.com/300/300/{tag}?lock={base_seed + i}" for i in range(30)]
 
     # ========== 壁纸设置 ==========
     def set_online_wallpaper(self, url, img_id):
@@ -921,7 +1069,6 @@ class WallpaperChanger:
         self.canvas.coords(self.weather_text_id, weather_center[0], weather_center[1])
 
     def translate_weather_desc(self, desc):
-        # 此方法保留兼容，但不再直接使用，所有翻译都走 translate_weather_en_to_cn
         return translate_weather_en_to_cn(desc)
 
     def ensure_chinese_weather(self, text):
@@ -955,7 +1102,6 @@ class WallpaperChanger:
         return city
 
     def update_weather(self):
-        # 直接使用 ReturnTempAndWeather6 获取天气，确保翻译正确
         weather_info = ReturnTempAndWeather6()
         city, temp, desc = weather_info
         if city == "获取失败" or desc == "N/A" or desc == "未知":
@@ -976,23 +1122,27 @@ class WallpaperChanger:
             time.sleep(60)
             self.update_weather()
 
+    # ========== 公告 ==========
     def show_announcement(self):
         ann_win = tk.Toplevel(self.root)
         ann_win.title("公告")
         ann_win.geometry("420x400")
         ann_win.configure(bg='#2b2b2b')
         ann_win.transient(self.root)
+        self._apply_icon_to_window(ann_win)
         tk.Label(ann_win, text=self.announcement_text, bg='#2b2b2b', fg='white',
                  font=(self.font_family, 10), justify=tk.LEFT, wraplength=380).pack(padx=20, pady=20)
         tk.Button(ann_win, text="关闭", command=ann_win.destroy,
                   bg='#4a4a4a', fg='white', width=10).pack(pady=10)
 
+    # ========== 启动画面 ==========
     def show_splash_animation(self):
         splash = tk.Toplevel(self.root)
         splash.overrideredirect(True)
         transparent_color = '#FF00FF'
         splash.configure(bg=transparent_color)
         splash.attributes('-transparentcolor', transparent_color)
+        self._apply_icon_to_window(splash)
 
         w, h = 320, 160
         sw = splash.winfo_screenwidth()
@@ -1023,18 +1173,19 @@ class WallpaperChanger:
         fill_rect = canvas.create_rectangle(bar_x, bar_y, bar_x, bar_y + bar_height,
                                             fill='#4CAF50', outline='')
 
+        # 每25ms增加1，总时长约2.5秒
         self._update_progress(splash, canvas, fill_rect, percent_text,
-                              bar_x, bar_y, bar_width, bar_height)
+                              bar_x, bar_y, bar_width, bar_height, current=0, step=1, delay=25)
 
-    def _update_progress(self, splash, canvas, fill_rect, percent_text, bar_x, bar_y, bar_width, bar_height, current=0):
+    def _update_progress(self, splash, canvas, fill_rect, percent_text, bar_x, bar_y, bar_width, bar_height, current=0, step=1, delay=50):
         if current > 100:
             current = 100
         fill_width = int(bar_width * current / 100)
         canvas.coords(fill_rect, bar_x, bar_y, bar_x + fill_width, bar_y + bar_height)
         canvas.itemconfig(percent_text, text=f"{current}%")
         if current < 100:
-            splash.after(50, self._update_progress, splash, canvas, fill_rect, percent_text,
-                         bar_x, bar_y, bar_width, bar_height, current + 1)
+            splash.after(delay, self._update_progress, splash, canvas, fill_rect, percent_text,
+                         bar_x, bar_y, bar_width, bar_height, current + step, step, delay)
         else:
             splash.after(300, lambda: self._finish_splash(splash))
 
@@ -1048,12 +1199,14 @@ class WallpaperChanger:
         self.root.deiconify()
         self.root.lift()
 
+    # ========== 设置窗口 ==========
     def show_settings(self):
         settings_win = tk.Toplevel(self.root)
         settings_win.title("设置")
         settings_win.geometry("400x580")
         settings_win.configure(bg='#2b2b2b')
         settings_win.transient(self.root)
+        self._apply_icon_to_window(settings_win)
         tk.Label(settings_win, text="设置", bg='#2b2b2b', fg='white',
                  font=(self.font_family, 16, 'bold')).pack(pady=(20, 20))
         button_width = 18
@@ -1080,11 +1233,19 @@ class WallpaperChanger:
                   bg='#4a4a4a', fg='white', width=button_width, height=1,
                   font=(self.font_family, 10)).pack(pady=5)
 
+        tk.Button(settings_win, text="壁纸保存路径", command=self.choose_download_path,
+                  bg='#4a4a4a', fg='white', width=button_width, height=1,
+                  font=(self.font_family, 10)).pack(pady=5)
+
         tk.Button(settings_win, text="自定义图标", command=self.show_icon_window,
                   bg='#4a4a4a', fg='white', width=button_width, height=1,
                   font=(self.font_family, 10)).pack(pady=5)
 
         tk.Button(settings_win, text="检查更新", command=self.check_for_updates,
+                  bg='#4a4a4a', fg='white', width=button_width, height=1,
+                  font=(self.font_family, 10)).pack(pady=5)
+
+        tk.Button(settings_win, text="GitHub仓库", command=self.show_repo_window,
                   bg='#4a4a4a', fg='white', width=button_width, height=1,
                   font=(self.font_family, 10)).pack(pady=5)
 
@@ -1096,7 +1257,58 @@ class WallpaperChanger:
                   bg='#4a4a4a', fg='white', width=button_width, height=1,
                   font=(self.font_family, 10)).pack(pady=(10, 20))
 
-    # ========== 自定义图标窗口（优化后） ==========
+    def choose_download_path(self):
+        folder = filedialog.askdirectory(title="选择壁纸默认保存路径")
+        if folder:
+            self.config['download_path'] = folder
+            self.save_config(self.config)
+            messagebox.showinfo("成功", f"壁纸默认保存路径已设置为：\n{folder}")
+
+    def show_repo_window(self):
+        repo_win = tk.Toplevel(self.root)
+        repo_win.title("仓库地址")
+        repo_win.geometry("500x250")
+        repo_win.configure(bg='#2b2b2b')
+        repo_win.transient(self.root)
+        self._apply_icon_to_window(repo_win)
+
+        tk.Label(repo_win, text="仓库地址", bg='#2b2b2b', fg='white',
+                 font=(self.font_family, 14, 'bold')).pack(pady=(20, 10))
+
+        github_frame = tk.Frame(repo_win, bg='#2b2b2b')
+        github_frame.pack(fill=tk.X, padx=20, pady=5)
+        tk.Label(github_frame, text="GitHub:", bg='#2b2b2b', fg='white',
+                 font=(self.font_family, 10, 'bold')).pack(side=tk.LEFT)
+        github_url = "https://github.com/CrystalKBITZ/AIwallpaper"
+        github_label = tk.Label(github_frame, text=github_url, bg='#2b2b2b', fg='#4da6ff',
+                                font=(self.font_family, 10, 'underline'), cursor='hand2')
+        github_label.pack(side=tk.LEFT, padx=(5, 10))
+        github_label.bind("<Button-1>", lambda e: webbrowser.open(github_url))
+        tk.Button(github_frame, text="复制", command=lambda: self.copy_to_clipboard(github_url),
+                  bg='#4a4a4a', fg='white', font=(self.font_family, 9)).pack(side=tk.RIGHT)
+
+        gitee_frame = tk.Frame(repo_win, bg='#2b2b2b')
+        gitee_frame.pack(fill=tk.X, padx=20, pady=5)
+        tk.Label(gitee_frame, text="Gitee:", bg='#2b2b2b', fg='white',
+                 font=(self.font_family, 10, 'bold')).pack(side=tk.LEFT)
+        gitee_url = "https://gitee.com/crystal-void/AIwallpaper"
+        gitee_label = tk.Label(gitee_frame, text=gitee_url, bg='#2b2b2b', fg='#4da6ff',
+                               font=(self.font_family, 10, 'underline'), cursor='hand2')
+        gitee_label.pack(side=tk.LEFT, padx=(5, 10))
+        gitee_label.bind("<Button-1>", lambda e: webbrowser.open(gitee_url))
+        tk.Button(gitee_frame, text="复制", command=lambda: self.copy_to_clipboard(gitee_url),
+                  bg='#4a4a4a', fg='white', font=(self.font_family, 9)).pack(side=tk.RIGHT)
+
+        tk.Button(repo_win, text="关闭", command=repo_win.destroy,
+                  bg='#4a4a4a', fg='white', width=10,
+                  font=(self.font_family, 10)).pack(pady=20)
+
+    def copy_to_clipboard(self, text):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        messagebox.showinfo("复制成功", "网址已复制到剪贴板")
+
+    # ========== 图标窗口 ==========
     def show_icon_window(self):
         self.icon_win = tk.Toplevel(self.root)
         win = self.icon_win
@@ -1104,6 +1316,7 @@ class WallpaperChanger:
         win.geometry("500x350")
         win.configure(bg='#2b2b2b')
         win.transient(self.root)
+        self._apply_icon_to_window(win)
 
         current_dir = self.config.get('icon_dir', os.path.abspath("."))
         self.current_icon_dir = tk.StringVar(value=current_dir)
@@ -1236,6 +1449,9 @@ class WallpaperChanger:
         self.config['icon_dir'] = self.current_icon_dir.get()
         self.save_config(self.config)
         self.icon_status_label.config(text=f"已应用: {filename}", fg='lightgreen')
+        for win in self.root.winfo_children():
+            if isinstance(win, tk.Toplevel):
+                self._apply_icon_to_window(win)
         self.root.after(3000, lambda: self.icon_status_label.config(text="") if self.icon_win.winfo_exists() else None)
 
     # ========== 检查更新 ==========
@@ -1365,6 +1581,7 @@ class WallpaperChanger:
         font_win.geometry("350x450")
         font_win.configure(bg='#2b2b2b')
         font_win.transient(self.root)
+        self._apply_icon_to_window(font_win)
         tk.Label(font_win, text="搜索字体:", bg='#2b2b2b', fg='white',
                  font=(self.font_family, 10)).pack(pady=(10, 5))
         search_var = tk.StringVar()
@@ -1435,11 +1652,12 @@ class WallpaperChanger:
         about_win.geometry("400x400")
         about_win.configure(bg='#2b2b2b')
         about_win.transient(self.root)
+        self._apply_icon_to_window(about_win)
         tk.Label(about_win, text="关于", bg='#2b2b2b', fg='white',
                  font=(self.font_family, 16, 'bold')).pack(pady=15)
         about_text = ("AIwallpaper\n\n"
                       "支持静态图片壁纸切换\n\n"
-                      "版本：1.0.1\n"
+                      "版本：1.0.2\n"
                       "开发者：Crystal空白\n"
                       "开发者QQ：3635835307\n"
                       "开发协助：-呈阶梯状分布-")
